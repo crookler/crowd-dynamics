@@ -2,10 +2,10 @@ import hoomd
 import gsd.hoomd
 import numpy as np
 import datetime, time
-from exitMovement import align
+from align import *
 
 #helper functions to display simulation status
-class print_sim_state(hoomd.custom.Action):
+class printStatus(hoomd.custom.Action):
     def act(self, timestep):
         global init_time, last_output
         try:
@@ -39,7 +39,7 @@ eps = 1 # epsilon is a constant affecting Lennard Jones function steepness/energ
 kT = 1 #system thermal energy
 
 particlePositions = [] #coordinates for each particle
-doorPosition = [0, 7.5, 0] #coordinates for door positio
+doorPosition = (0, 0, 0) #coordinates for door
 
 #set up p particles 
 for i in range(10):        
@@ -73,9 +73,9 @@ collision = hoomd.md.pair.LJ(
     nlist=hoomd.md.nlist.Cell(buffer=0.5),
     default_r_cut=0.75 #stop applying force at 0.75
 )
-collision.params[('A', 'A')] = dict(epsilon=eps, sigma=diameter) #lj between particles [A,A]
-collision.params[('A', 'W')] = dict(epsilon=eps, sigma=diameter)  #lj between particles and wall [A,W]
-collision.params[('W', 'W')] = dict(epsilon=0, sigma=diameter) #lj between walls (set to zero by epsilon)
+collision.params[('A', 'A')] = dict(epsilon=eps, sigma=diameter) #collision between particles [A,A]
+collision.params[('A', 'W')] = dict(epsilon=eps, sigma=diameter)  #collision between particles and wall [A,W]
+collision.params[('W', 'W')] = dict(epsilon=0, sigma=diameter) #collision between walls (set to zero by epsilon)
 
 randomness = hoomd.md.methods.Brownian(filter=hoomd.filter.Type(['A']), kT = 1*kT)
 
@@ -85,28 +85,18 @@ integrator.forces = [fire,collision] #add forces to integrator
 simulation.operations.integrator = integrator  #put integrator in sim object
 
 update_every_n = 5
-simulation.operations.writers.append(
-    hoomd.write.CustomWriter(
-        action = print_sim_state(),
-        trigger = trigger_every_n_sec()
-    )
-)
-gsd_writer = hoomd.write.GSD(
-    trigger = hoomd.trigger.Periodic(int(1e4)),
-    filename = "outputs/wipSimulation.gsd",
-    mode = 'wb',
-    filter = hoomd.filter.All(),
-    dynamic=['property', 'momentum', 'attribute']
-)
+simulation.operations.writers.append(hoomd.write.CustomWriter(action = printStatus(),trigger = trigger_every_n_sec()))
+
+gsd_writer = hoomd.write.GSD(trigger = hoomd.trigger.Periodic(int(1e4)), filename = "outputs/wipSimulation.gsd", mode = 'wb', filter = hoomd.filter.All(), dynamic=['property', 'momentum', 'attribute'])
 simulation.operations.writers.append(gsd_writer)
 
-alignmentUpdate = hoomd.update.CustomUpdater(action=align(numParticles=N, doorX=doorPosition[0], doorY=doorPosition[1]),trigger=hoomd.trigger.Periodic(1000))
+alignmentUpdate = hoomd.update.CustomUpdater(action=align(numParticles=N, doorX=doorPosition[0], doorY=doorPosition[1]),trigger=hoomd.trigger.Periodic(1000)) #trigger alignment every n timesteps
 simulation.operations.updaters.append(alignmentUpdate)
 
 #Run simulation
 init_time = time.time()                              
 last_output = init_time                            
-simulation.run(500_000) #simulation length
+simulation.run(1_000_000) #simulation length
 gsd_writer.flush()
 
 
