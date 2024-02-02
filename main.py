@@ -33,28 +33,31 @@ sigma = 1     # sigma is diameter of particles
 eps = 1       # epsilon is a constant affecting Lennard Jones function steepness/energy
 kT = 1        # kT is the system thermal energy
 dt = 1e-6     # dt is time step size
-N = 100       # N is number of particles
+N = 115       # N is number of particles (including walls and blackhold)
 
-#Set up wall and particles
-particlePositions = []     
+#set up a particles
+particlePositions = [] 
+
 for i in range(10):        
   for j in range(10):
     particlePositions.append([i-12+0.5, j-5+0.5, 0])
 
-wall_particles = []
+#set of w particles
 for i in range(16):
   if i < 7 or i > 8:
-    wall_particles.append([0, i-15/2, 0])
+    particlePositions.append([0, i-15/2, 0])
+
+#set up b particles
+particlePositions.append([-15,0,0])
 
 s = gsd.hoomd.Frame() #initial frame
-s.particles.position = list(particlePositions) + wall_particles
-s.particles.N = N + len(wall_particles) 
-s.particles.typeid = ([0] * N + [1] * len(wall_particles)) #particles types (related to above indices)
-s.particles.types = ["A", "W"] #A is particle and W is wall
+s.particles.position = list(particlePositions) 
+s.particles.N = N 
+s.particles.typeid = ([0] * 100 + [1] * 14 + [2]) #particles types (related to above indices)
+s.particles.types = ["A", "W", "B"] #A is particle and W is wall and B is blackhole
 s.configuration.box = [30,15,0,0,0,0]
 with gsd.hoomd.open(name='wipIC.gsd', mode='w') as f:
     f.append(s)
-
 
 #Setting up HOOMD simulation object
 sim = hoomd.Simulation( # define simulation object and specify device and seed
@@ -67,16 +70,30 @@ sim.create_state_from_gsd(filename='wipIC.gsd') # load initial state
 fire = hoomd.md.force.Active(
     filter = hoomd.filter.Type(['A'])
 )
-fire.active_force['A'] = (30, 0, 0) #A interacting with itself question mark?
+fire.active_force['A'] = (30, 0, 0) #accerlates back this maximum (after collision)
 
 #Setting up particle interactions
-lj = hoomd.md.pair.LJ(
+collision = hoomd.md.pair.LJ(
     nlist=hoomd.md.nlist.Cell(buffer=0.5),
-    default_r_cut=0.75
+    default_r_cut=0.75 #stop applying force at 0.75
 )
-lj.params[('A', 'A')] = dict(epsilon=eps, sigma=sigma) #lj between particles [A,A]
-lj.params[('A', 'W')] = dict(epsilon=eps, sigma=sigma)  #lj between particles and wall [A,W]
-lj.params[('W', 'W')] = dict(epsilon=0, sigma=sigma) #lj between walls (set to zero by epsilon)
+collision.params[('A', 'A')] = dict(epsilon=eps, sigma=sigma) #lj between particles [A,A]
+collision.params[('A', 'W')] = dict(epsilon=eps, sigma=sigma)  #lj between particles and wall [A,W]
+collision.params[('W', 'W')] = dict(epsilon=0, sigma=sigma) #lj between walls (set to zero by epsilon)
+collision.params[('A', 'B')] = dict(epsilon=0, sigma=sigma)
+collision.params[('W', 'B')] = dict(epsilon=0, sigma=sigma)
+collision.params[('B', 'B')] = dict(epsilon=0, sigma=sigma)
+
+attractor = hoomd.md.pair.LJ(
+    nlist=hoomd.md.nlist.Cell(buffer=0.5),
+    default_r_cut= 6 #should be attractive?
+)
+attractor.params[('A', 'A')] = dict(epsilon=0, sigma=sigma)
+attractor.params[('A', 'B')] = dict(epsilon=500, sigma=sigma) #pull particles toward blackhole
+attractor.params[('B', 'B')] = dict(epsilon=0, sigma=sigma)
+attractor.params[('W','B')] = dict(epsilon=0, sigma=sigma) 
+attractor.params[('A', 'W')] = dict(epsilon=0, sigma=sigma)
+attractor.params[('W', 'W')] = dict(epsilon=0, sigma=sigma)
 
 sim.operations.integrator = hoomd.md.Integrator(
     dt = dt,
@@ -86,7 +103,7 @@ sim.operations.integrator = hoomd.md.Integrator(
             kT = 1 * kT, #system thermal energy (influences particle speed)                                                      
         )
     ],
-    forces = [lj, fire]
+    forces = [collision, fire, attractor]
 )
 update_every_n = 5
 sim.operations.writers.append(
