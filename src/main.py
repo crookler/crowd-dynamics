@@ -1,10 +1,10 @@
-##### import python packages
 import hoomd
 import gsd.hoomd
 import numpy as np
 import datetime, time
+from exitMovement import align
 
-##### helper functions to display simulation status
+#helper functions to display simulation status
 class print_sim_state(hoomd.custom.Action):
     def act(self, timestep):
         global init_time, last_output
@@ -28,16 +28,20 @@ class trigger_every_n_sec(hoomd.trigger.Trigger):
         global last_output, update_every_n
         return ((time.time() - last_output) >=update_every_n)
 
-#System variable definitions
-sigma = 1     # sigma is diameter of particles
-eps = 1       # epsilon is a constant affecting Lennard Jones function steepness/energy
-kT = 1        # kT is the system thermal energy
-dt = 1e-6     # dt is time step size
-N = 115       # N is number of particles (including walls and blackhold)
+#system variable definitions
+diameter = 1 #diameter of particles
+dt = 1e-6 #time step size
+N = 100 #number of particles
+W = 14 #number of walls
 
-#set up a particles
-particlePositions = [] 
+#molecular definitions (come back to this later if needed)
+eps = 1 # epsilon is a constant affecting Lennard Jones function steepness/energy
+kT = 1 #system thermal energy
 
+particlePositions = [] #coordinates for each particle
+doorPosition = [0, 7.5, 0] #coordinates for door positio
+
+#set up p particles 
 for i in range(10):        
   for j in range(10):
     particlePositions.append([i-12+0.5, j-5+0.5, 0])
@@ -47,66 +51,41 @@ for i in range(16):
   if i < 7 or i > 8:
     particlePositions.append([0, i-15/2, 0])
 
-#set up b particles
-particlePositions.append([-15,0,0])
-
-s = gsd.hoomd.Frame() #initial frame
-s.particles.position = list(particlePositions) 
-s.particles.N = N 
-s.particles.typeid = ([0] * 100 + [1] * 14 + [2]) #particles types (related to above indices)
-s.particles.types = ["A", "W", "B"] #A is particle and W is wall and B is blackhole
-s.configuration.box = [30,15,0,0,0,0]
-with gsd.hoomd.open(name='wipIC.gsd', mode='w') as f:
-    f.append(s)
+start = gsd.hoomd.Frame() #initial frame
+start.particles.position = list(particlePositions) 
+start.particles.N = N + W
+start.particles.typeid = ([0] * N + [1] * W) #particles types (related to above indices)
+start.particles.types = ["A", "W"] #A is particle and W is wall and B is blackhole
+start.configuration.box = [30,15,0,0,0,0]
+with gsd.hoomd.open(name='outputs/wipIC.gsd', mode='w') as f:
+    f.append(start)
 
 #Setting up HOOMD simulation object
-sim = hoomd.Simulation( # define simulation object and specify device and seed
-    device=hoomd.device.auto_select(),
-    seed=1
-)
-sim.create_state_from_gsd(filename='wipIC.gsd') # load initial state
+simulation = hoomd.Simulation(device=hoomd.device.auto_select(), seed=1) #create simulation object
+simulation.create_state_from_gsd(filename='outputs/wipIC.gsd') # load initial state
 
 #Custom movement
-fire = hoomd.md.force.Active(
-    filter = hoomd.filter.Type(['A'])
-)
-fire.active_force['A'] = (30, 0, 0) #accerlates back this maximum (after collision)
+fire = hoomd.md.force.Active(filter = hoomd.filter.All())
+fire.active_force['A'] = (30, 0, 0) #accerlates back to this maximum (after collision)
 
 #Setting up particle interactions
 collision = hoomd.md.pair.LJ(
     nlist=hoomd.md.nlist.Cell(buffer=0.5),
     default_r_cut=0.75 #stop applying force at 0.75
 )
-collision.params[('A', 'A')] = dict(epsilon=eps, sigma=sigma) #lj between particles [A,A]
-collision.params[('A', 'W')] = dict(epsilon=eps, sigma=sigma)  #lj between particles and wall [A,W]
-collision.params[('W', 'W')] = dict(epsilon=0, sigma=sigma) #lj between walls (set to zero by epsilon)
-collision.params[('A', 'B')] = dict(epsilon=0, sigma=sigma)
-collision.params[('W', 'B')] = dict(epsilon=0, sigma=sigma)
-collision.params[('B', 'B')] = dict(epsilon=0, sigma=sigma)
+collision.params[('A', 'A')] = dict(epsilon=eps, sigma=diameter) #lj between particles [A,A]
+collision.params[('A', 'W')] = dict(epsilon=eps, sigma=diameter)  #lj between particles and wall [A,W]
+collision.params[('W', 'W')] = dict(epsilon=0, sigma=diameter) #lj between walls (set to zero by epsilon)
 
-attractor = hoomd.md.pair.LJ(
-    nlist=hoomd.md.nlist.Cell(buffer=0.5),
-    default_r_cut= 6 #should be attractive?
-)
-attractor.params[('A', 'A')] = dict(epsilon=0, sigma=sigma)
-attractor.params[('A', 'B')] = dict(epsilon=500, sigma=sigma) #pull particles toward blackhole
-attractor.params[('B', 'B')] = dict(epsilon=0, sigma=sigma)
-attractor.params[('W','B')] = dict(epsilon=0, sigma=sigma) 
-attractor.params[('A', 'W')] = dict(epsilon=0, sigma=sigma)
-attractor.params[('W', 'W')] = dict(epsilon=0, sigma=sigma)
+randomness = hoomd.md.methods.Brownian(filter=hoomd.filter.Type(['A']), kT = 1*kT)
 
-sim.operations.integrator = hoomd.md.Integrator(
-    dt = dt,
-    methods=[
-        hoomd.md.methods.Brownian(
-            filter = hoomd.filter.Type(['A']), #just integrate particles (walls are fixed)
-            kT = 1 * kT, #system thermal energy (influences particle speed)                                                      
-        )
-    ],
-    forces = [collision, fire, attractor]
-)
+integrator = hoomd.md.Integrator(dt = dt) #define an integrator
+integrator.methods = [randomness] #add random Brownian motion to particle movements
+integrator.forces = [fire,collision] #add forces to integrator
+simulation.operations.integrator = integrator  #put integrator in sim object
+
 update_every_n = 5
-sim.operations.writers.append(
+simulation.operations.writers.append(
     hoomd.write.CustomWriter(
         action = print_sim_state(),
         trigger = trigger_every_n_sec()
@@ -114,17 +93,20 @@ sim.operations.writers.append(
 )
 gsd_writer = hoomd.write.GSD(
     trigger = hoomd.trigger.Periodic(int(1e4)),
-    filename = "wipSimulation.gsd",
+    filename = "outputs/wipSimulation.gsd",
     mode = 'wb',
     filter = hoomd.filter.All(),
     dynamic=['property', 'momentum', 'attribute']
 )
-sim.operations.writers.append(gsd_writer)
+simulation.operations.writers.append(gsd_writer)
+
+alignmentUpdate = hoomd.update.CustomUpdater(action=align(numParticles=N, doorX=doorPosition[0], doorY=doorPosition[1]),trigger=hoomd.trigger.Periodic(1000))
+simulation.operations.updaters.append(alignmentUpdate)
 
 #Run simulation
 init_time = time.time()                              
 last_output = init_time                            
-sim.run(500_000) #simulation length
+simulation.run(500_000) #simulation length
 gsd_writer.flush()
 
 
