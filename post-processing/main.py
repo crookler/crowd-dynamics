@@ -39,7 +39,12 @@ with gsd.hoomd.open(name='outputs/wipSimulation.gsd', mode='r') as f:
         
         number_escaped[frame] = current_escapes
 
-plt.plot(number_escaped, frames)
+print(number_escaped)
+print(frames)
+plt.plot(frames, number_escaped)
+plt.title("Number of Individuals Escaped Over Time")
+plt.xlabel("Frame")
+plt.ylabel("Number Escaped")
 plt.show()
 
 
